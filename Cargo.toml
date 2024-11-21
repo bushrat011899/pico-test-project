@@ -1,8 +1,10 @@
 [package]
 edition = "2021"
-name = "rp2040-project-template"
+name = "pico-example"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
+
+[lib]
 
 [dependencies]
 cortex-m = "0.7"
@@ -13,15 +15,22 @@ defmt = "0.3"
 defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
-# We're using a Pico by default on this template
 rp-pico = "0.9"
+embedded-graphics = "0.8.1"
+epd-waveshare = { version = "0.6.0", features = ["graphics"] }
+embedded-hal-bus = "0.2.0"
+portable-atomic = { version = "1.9.0", features = ["critical-section"] }
 
-# but you can use any BSP. Uncomment this to use the pro_micro_rp2040 BSP instead
-# sparkfun-pro-micro-rp2040 = "0.8"
+bevy_ecs = { git = "https://github.com/bushrat011899/bevy", branch = "NoSTDBevyApp", default-features = false, features = [
+    "portable-atomic",
+    "critical-section",
+] }
+bevy_app = { git = "https://github.com/bushrat011899/bevy", branch = "NoSTDBevyApp", default-features = false, features = [
+    "portable-atomic",
+    "critical-section",
+] }
 
-# If you're not going to use a Board Support Package you'll need these:
-# rp2040-hal = { version="0.10", features=["rt", "critical-section-impl"] }
-# rp2040-boot2 = "0.3"
+embedded-alloc = "0.6.0"
 
 # cargo build/run
 [profile.dev]

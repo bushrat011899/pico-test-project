@@ -1,77 +1,125 @@
-//! Blinks the LED on a Pico board
-//!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
 #![no_std]
 #![no_main]
 
-use bsp::entry;
-use defmt::*;
-use defmt_rtt as _;
-use embedded_hal::digital::OutputPin;
-use panic_probe as _;
+extern crate alloc;
 
-// Provide an alias for our BSP so we can switch targets quickly.
-// Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
-use rp_pico as bsp;
-// use sparkfun_pro_micro_rp2040 as bsp;
-
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
+use alloc::format;
+use bevy_app::{App, Startup, Update};
+use bevy_ecs::{
+    schedule::IntoSystemConfigs,
+    system::{NonSendMut, Res, ResMut, Resource},
 };
+use defmt_rtt as _;
+use embedded_alloc::LlffHeap as Heap;
+use embedded_graphics::{
+    mono_font::{ascii::FONT_6X10, MonoTextStyle},
+    prelude::*,
+    text::Text,
+};
+use embedded_hal::delay::DelayNs;
+use epd_waveshare::prelude::*;
+use panic_probe as _;
+use rp_pico::{entry, hal::Timer};
+
+use pico_example::{Display, DisplayBuffer, PiPicoDemoPlugin};
+
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
+const HEAP_SIZE: usize = 96 * 1024;
+
+const BEVY: &[u8] = include_bytes!("../assets/bevy_bird_dark.data");
+
+#[derive(Resource, Default)]
+pub struct Counter(pub u32);
 
 #[entry]
 fn main() -> ! {
-    info!("Program start");
-    let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+    init_heap();
 
-    // External high-speed crystal on the pico board is 12Mhz
-    let external_xtal_freq_hz = 12_000_000u32;
-    let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .ok()
-    .unwrap();
+    App::new()
+        .add_plugins(PiPicoDemoPlugin)
+        .init_resource::<Counter>()
+        .add_systems(Startup, clear_display)
+        .add_systems(Update, (draw_scene, render, update_counter).chain())
+        .run();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-
-    let pins = bsp::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
-
-    // This is the correct pin on the Raspberry Pico board. On other boards, even if they have an
-    // on-board LED, it might need to be changed.
-    //
-    // Notably, on the Pico W, the LED is not connected to any of the RP2040 GPIOs but to the cyw43 module instead.
-    // One way to do that is by using [embassy](https://github.com/embassy-rs/embassy/blob/main/examples/rp/src/bin/wifi_blinky.rs)
-    //
-    // If you have a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
-    // LED to one of the GPIO pins, and reference that pin here. Don't forget adding an appropriate resistor
-    // in series with the LED.
-    let mut led_pin = pins.led.into_push_pull_output();
-
-    loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
-    }
+    loop {}
 }
 
-// End of file
+fn draw_scene(mut buffer: ResMut<DisplayBuffer>, counter: Res<Counter>) {
+    let style = MonoTextStyle::new(&FONT_6X10, Color::Black);
+
+    buffer.0.clear(Color::White).unwrap();
+
+    Text::new("Bevy?!", Point::new(10, 30), style)
+        .draw(&mut buffer.0)
+        .unwrap();
+
+    Text::new("Not a toaster...", Point::new(10, 50), style)
+        .draw(&mut buffer.0)
+        .unwrap();
+
+    Text::new("...but still small!", Point::new(10, 70), style)
+        .draw(&mut buffer.0)
+        .unwrap();
+
+    for (index, value) in BEVY.iter().step_by(2).enumerate() {
+        let x = index % 64;
+        let y = (index - x) / 64;
+
+        if *value == 0 {
+            Pixel(Point::new(32 + x as i32, 96 + y as i32), Color::Black)
+                .draw(&mut buffer.0)
+                .unwrap();
+        }
+    }
+
+    Text::new("Frames Rendered:", Point::new(10, 200), style)
+        .draw(&mut buffer.0)
+        .unwrap();
+
+    let message = format!("{}", counter.0);
+
+    Text::new(&message, Point::new(10, 220), style)
+        .draw(&mut buffer.0)
+        .unwrap();
+
+    Text::new("Heap:", Point::new(10, 240), style)
+        .draw(&mut buffer.0)
+        .unwrap();
+
+    let message = format!("{} / {} KiB", HEAP.free() / 1024, HEAP_SIZE / 1024);
+
+    Text::new(&message, Point::new(10, 260), style)
+        .draw(&mut buffer.0)
+        .unwrap();
+}
+
+fn clear_display(mut display: NonSendMut<Display>, mut timer: NonSendMut<Timer>) {
+    let Display { output, spi } = display.as_mut();
+    output.clear_frame(spi, &mut timer).unwrap();
+}
+
+fn render(
+    mut display: NonSendMut<Display>,
+    buffer: Res<DisplayBuffer>,
+    mut timer: NonSendMut<Timer>,
+) {
+    let Display { output, spi } = display.as_mut();
+    output
+        .update_frame(spi, &buffer.0.buffer(), &mut timer)
+        .unwrap();
+    output.display_frame(spi, &mut timer).unwrap();
+    output.wait_until_idle(spi, &mut timer).unwrap();
+    timer.delay_ms(5000);
+}
+
+fn update_counter(mut counter: ResMut<Counter>) {
+    counter.0 += 1;
+}
+
+fn init_heap() {
+    use core::mem::MaybeUninit;
+    static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+    unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
+}
